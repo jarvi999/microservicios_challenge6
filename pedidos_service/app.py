@@ -11,7 +11,7 @@ TOKEN = "supertoken123"
 PRODUCTOS_URL = "http://localhost:5001"
 INVENTARIO_URL = "http://localhost:5002"
 
-logging.basicConfig(level=logging.INFO) #registrar eventos, mostrar mensaje de info o superior
+logging.basicConfig(filename="inventario.log", level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s") #registrar eventos, mostrar mensaje de info o superior
 
 fallos_consecutivos = 0 #ver cuantas  veces fallo la comunicacion
 CIRCUIT_BREAKER_LIMITE = 3 # limite de veces
@@ -36,8 +36,8 @@ def init_db():
     conn.commit()
     conn.close()
 
-def request_con_retry(url, headers, retries=3):
-    global fallos_consecutivos, CIRCUIT_OPEN
+def request_con_retry(url, headers, retries=3): #datos para hacer peticiones HTTP
+    global fallos_consecutivos, CIRCUIT_OPEN #modificar variable global, contador de cantida de fallos
 
     if CIRCUIT_OPEN:
         return None
@@ -47,9 +47,9 @@ def request_con_retry(url, headers, retries=3):
             response = requests.get(url, headers=headers, timeout=2)
             fallos_consecutivos = 0
             return response
-        except:
+        except Exception as e:
             fallos_consecutivos += 1
-            logging.error("Error en comunicación, reintentando...")
+            logging.error(f"Error en comunicación: {str(e)}")
             time.sleep(1)
 
             if fallos_consecutivos >= CIRCUIT_BREAKER_LIMITE:
@@ -57,47 +57,78 @@ def request_con_retry(url, headers, retries=3):
                 logging.error("Circuit Breaker ACTIVADO")
                 return None
 
-@app.route("/pedido", methods=["POST"])
+@app.route("/pedido", methods=["POST"]) #ruta exacta 
 def crear_pedido():
     if not verificar_token():
         return jsonify({"error": "No autorizado"}), 401
 
-    if CIRCUIT_OPEN:
+    if CIRCUIT_OPEN: #intentando ingresar al servidor
         return jsonify({"error": "Servicio temporalmente no disponible"}), 503
 
-    data = request.json
-    headers = {"Authorization": f"Bearer {TOKEN}"}
+    # Validar que venga JSON
+    if not request.is_json:
+        return jsonify({"error": "El cuerpo debe ser JSON"}), 400
 
-    producto_resp = request_con_retry(
-        f"{PRODUCTOS_URL}/productos/{data['producto_id']}",
-        headers
-    )
+    data = request.get_json() #recibiendo informacion en formato json
 
-    if not producto_resp or producto_resp.status_code != 200:
-        return jsonify({"error": "Producto no disponible"}), 400
+    # Validar campos obligatorios
+    if "producto_id" not in data or "cantidad" not in data:
+        return jsonify({"error": "Faltan campos obligatorios (producto_id, cantidad)"}), 400
 
-    stock_resp = request_con_retry(
-        f"{INVENTARIO_URL}/inventario/{data['producto_id']}",
-        headers
-    )
+    # Validar producto_id
+    try:
+        producto_id = int(data["producto_id"])
+        if producto_id <= 0:
+            return jsonify({"error": "producto_id debe ser mayor a 0"}), 400
+    except (ValueError, TypeError):
+        return jsonify({"error": "producto_id debe ser numérico entero"}), 400
 
-    if not stock_resp or stock_resp.status_code != 200:
-        return jsonify({"error": "Stock no disponible"}), 400
+    # Validar cantidad
+    try:
+        cantidad = int(data["cantidad"])
+        if cantidad <= 0:
+            return jsonify({"error": "La cantidad debe ser mayor a 0"}), 400
+    except (ValueError, TypeError):
+        return jsonify({"error": "La cantidad debe ser numérica entera"}), 400
 
-    stock = stock_resp.json()["stock"]
+    headers = {"Authorization": f"Bearer {TOKEN}"} # 
 
-    if stock < data["cantidad"]:
-        return jsonify({"error": "Stock insuficiente"}), 400
+    try:
+        producto_resp = request_con_retry(
+            f"{PRODUCTOS_URL}/productos/{producto_id}",
+            headers
+        )
 
-    conn = sqlite3.connect("pedidos.db")
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO pedidos (producto_id, cantidad) VALUES (?, ?)",
-                   (data["producto_id"], data["cantidad"]))
-    conn.commit()
-    conn.close()
+        if not producto_resp or producto_resp.status_code != 200:
+            return jsonify({"error": "Producto no disponible"}), 400
 
-    logging.info("Pedido creado correctamente")
-    return jsonify({"mensaje": "Pedido creado con éxito"}), 201
+        stock_resp = request_con_retry(
+            f"{INVENTARIO_URL}/inventario/{producto_id}",
+            headers
+        )
+
+        if not stock_resp or stock_resp.status_code != 200:
+            return jsonify({"error": "Stock no disponible"}), 400
+
+        stock = stock_resp.json()["stock"]
+
+        if stock < cantidad:
+            return jsonify({"error": "Stock insuficiente"}), 400
+
+        conn = sqlite3.connect("pedidos.db")
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO pedidos (producto_id, cantidad) VALUES (?, ?)",
+                       (producto_id, cantidad))
+        conn.commit()
+        conn.close()
+
+        logging.info("Pedido creado correctamente")
+        return jsonify({"mensaje": "Pedido creado con éxito"}), 201
+
+    except Exception as e:
+        logging.error(f"Error interno: {str(e)}")
+        return jsonify({"error": "Error interno del servidor"}), 500
+
 
 if __name__ == "__main__":
     init_db()
