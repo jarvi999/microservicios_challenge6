@@ -1,8 +1,8 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify # Importamos Flask para crear la API y manejar JSON
 import sqlite3
-import logging  #registrar eventos, y clasificar importancia
+import logging  # Importamos para registrar eventos importantes en un archivo log
 
-app = Flask(__name__)
+app = Flask(__name__) # Creamos la instancia del servidor Flask
 
 TOKEN = "supertoken123"
 
@@ -26,41 +26,42 @@ def init_db():
     conn.commit()
     conn.close()
 
+# RUTA PARA ACTUALIZAR STOCK: Se usa POST para enviar datos de creación o actualización
 @app.route("/inventario", methods=["POST"])
 def agregar_stock():
     if not verificar_token():
-        return jsonify({"error": "No autorizado"}), 401
+        return jsonify({"error": "No autorizado"}), 401 #no autorizacion
 
     # Validar que venga JSON
     if not request.is_json:
-        return jsonify({"error": "El cuerpo debe ser JSON"}), 400
+        return jsonify({"error": "El cuerpo debe ser JSON"}), 400 #no se pudo procesar solicitud por error de cliente
 
     data = request.get_json()
 
     # Validar campos obligatorios
     if "producto_id" not in data or "stock" not in data:
-        return jsonify({"error": "Faltan campos obligatorios (producto_id, stock)"}), 400
+        return jsonify({"error": "Faltan campos obligatorios (producto_id, stock)"}), 400 #no se pudo procesar solicitud por error de cliente
 
     # Validar producto_id
     try:
         producto_id = int(data["producto_id"])
         if producto_id <= 0:
-            return jsonify({"error": "producto_id debe ser mayor a 0"}), 400
+            return jsonify({"error": "producto_id debe ser mayor a 0"}), 400 #no se pudo procesar solicitud por error de cliente
     except (ValueError, TypeError):
-        return jsonify({"error": "producto_id debe ser numerico entero"}), 400
+        return jsonify({"error": "producto_id debe ser numerico entero"}), 400 #no se pudo procesar solicitud por error de cliente
 
     # Validar stock
     try:
         stock = int(data["stock"])
         if stock < 0:
-            return jsonify({"error": "El stock no puede ser negativo"}), 400
+            return jsonify({"error": "El stock no puede ser negativo"}), 400 #no se pudo procesar solicitud por error de cliente
     except (ValueError, TypeError):
         return jsonify({"error": "El stock debe ser numerico entero"}), 400
 
     try:
         conn = sqlite3.connect("inventario.db")
         cursor = conn.cursor()
-
+        # Inserta el nuevo stock o reemplaza el valor si el producto_id ya existe
         cursor.execute("INSERT OR REPLACE INTO inventario (producto_id, stock) VALUES (?, ?)",
                        (producto_id, stock))
 
@@ -80,12 +81,14 @@ def verificar_stock(producto_id):
     if not verificar_token():
         return jsonify({"error": "No autorizado"}), 401
 
+# Validación extra: el ID de la URL debe ser un número válido
     if producto_id <= 0:
         return jsonify({"error": "producto_id invalido"}), 400
 
     try:
         conn = sqlite3.connect("inventario.db")
         cursor = conn.cursor()
+        # Busca el stock del producto específico usando su ID
         cursor.execute("SELECT stock FROM inventario WHERE producto_id=?", (producto_id,))
         stock = cursor.fetchone()
         conn.close()
@@ -96,6 +99,7 @@ def verificar_stock(producto_id):
         return jsonify({"producto_id": producto_id, "stock": stock[0]})
 
     except Exception as e:
+        # Registra fallos internos durante la consulta
         logging.error(f"Error interno: {str(e)}")
         return jsonify({"error": "Error interno del servidor"}), 500
 

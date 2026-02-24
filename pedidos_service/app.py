@@ -1,7 +1,7 @@
-from flask import Flask, request, jsonify
-import sqlite3
-import requests
-import logging
+from flask import Flask, request, jsonify # Importa Flask para la API y herramientas para leer/responder JSON
+import sqlite3 # base de datos
+import requests # Importa para que este servicio pueda HACER llamadas a otros microservicios
+import logging # Importa para registrar eventos y errores en un archivo o consola
 import time
 
 app = Flask(__name__)
@@ -37,14 +37,14 @@ def init_db():
     conn.close()
 
 def request_con_retry(url, headers, retries=3): #datos para hacer peticiones HTTP
-    global fallos_consecutivos, CIRCUIT_OPEN #modificar variable global, contador de cantida de fallos
+    global fallos_consecutivos, CIRCUIT_OPEN #modificar variable globales de estado de circuito, contador de cantida de fallos
 
     if CIRCUIT_OPEN:
-        return None
+        return None #devolver repuesta o indicar el fallo 
 
     for i in range(retries):
         try:
-            response = requests.get(url, headers=headers, timeout=2)
+            response = requests.get(url, headers=headers, timeout=2) #esperar repuesta de otro microservicio, espera max 2 segundos
             fallos_consecutivos = 0
             return response
         except Exception as e:
@@ -53,7 +53,7 @@ def request_con_retry(url, headers, retries=3): #datos para hacer peticiones HTT
             time.sleep(1)
 
             if fallos_consecutivos >= CIRCUIT_BREAKER_LIMITE:
-                CIRCUIT_OPEN = True
+                CIRCUIT_OPEN = True 
                 logging.error("Circuit Breaker ACTIVADO")
                 return None
 
@@ -92,23 +92,23 @@ def crear_pedido():
         return jsonify({"error": "La cantidad debe ser numérica entera"}), 400
 
     headers = {"Authorization": f"Bearer {TOKEN}"} # 
-
+    #llama a microservicio producto
     try:
         producto_resp = request_con_retry(
             f"{PRODUCTOS_URL}/productos/{producto_id}",
             headers
         )
 
-        if not producto_resp or producto_resp.status_code != 200:
-            return jsonify({"error": "Producto no disponible"}), 400
-
+        if not producto_resp or producto_resp.status_code != 200: #servicio respondio, pero con error
+            return jsonify({"error": "Producto no disponible"}), 400 # producto no disponible
+    #llama al microservicio inventario
         stock_resp = request_con_retry(
             f"{INVENTARIO_URL}/inventario/{producto_id}",
             headers
         )
 
-        if not stock_resp or stock_resp.status_code != 200:
-            return jsonify({"error": "Stock no disponible"}), 400
+        if not stock_resp or stock_resp.status_code != 200:   #servicio respondio, pero con error
+            return jsonify({"error": "Stock no disponible"}), 400 #producto no disponible
 
         stock = stock_resp.json()["stock"]
 
