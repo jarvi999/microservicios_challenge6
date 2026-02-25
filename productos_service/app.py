@@ -6,7 +6,7 @@ app = Flask(__name__) # Creamos la instancia del servidor Flask
 
 TOKEN = "supertoken123"
 
-logging.basicConfig(filename="inventario.log", level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(filename="producto.log", level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 def verificar_token():
     auth = request.headers.get("Authorization") #etiqueta
@@ -70,7 +70,7 @@ def crear_producto():
         logging.error(f"Error interno: {str(e)}")
         return jsonify({"error": "Error interno del servidor"}), 500
 
-# RUTA PARA OBTENER UN PRODUCTO: Busca por ID en la URL
+# RUTA PARA OBTENER UN PRODUCTO: Busca por ID en la URL, query param
 @app.route("/productos/<int:id>", methods=["GET"])
 def obtener_producto(id):
     if not verificar_token():

@@ -11,11 +11,13 @@ TOKEN = "supertoken123"
 PRODUCTOS_URL = "http://localhost:5001"
 INVENTARIO_URL = "http://localhost:5002"
 
-logging.basicConfig(filename="inventario.log", level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s") #registrar eventos, mostrar mensaje de info o superior
+logging.basicConfig(filename="pedido.log", level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s") #registrar eventos, mostrar mensaje de info o superior
 
 fallos_consecutivos = 0 #ver cuantas  veces fallo la comunicacion
 CIRCUIT_BREAKER_LIMITE = 3 # limite de veces
 CIRCUIT_OPEN = False # cambia a true y deja de llamar a los otros servicios 
+tiempo_apertura = None # guarda el momento exacto en que se abrió el circuito
+CIRCUIT_RESET_TIMEOUT = 5 # NUEVA CONSTANTE: tiempo en segundos que el circuito permanecerá abierto
 
 def verificar_token():
     auth = request.headers.get("Authorization") #buscar etiqueta que llame authorization
@@ -37,10 +39,18 @@ def init_db():
     conn.close()
 
 def request_con_retry(url, headers, retries=3): #datos para hacer peticiones HTTP
-    global fallos_consecutivos, CIRCUIT_OPEN #modificar variable globales de estado de circuito, contador de cantida de fallos
+    global fallos_consecutivos, CIRCUIT_OPEN, tiempo_apertura #modificar variable globales de estado de circuito, contador de cantida de fallos
 
+    # NUEVA LÓGICA: verificar si el circuito estaba abierto y ya pasó el tiempo de espera
     if CIRCUIT_OPEN:
-        return None #devolver repuesta o indicar el fallo 
+        if tiempo_apertura and (time.time() - tiempo_apertura >= CIRCUIT_RESET_TIMEOUT): #se resta tiempo de apertura con time
+            # Se permite reintentar después de 5 segundos
+            CIRCUIT_OPEN = False
+            fallos_consecutivos = 0
+            tiempo_apertura = None
+            logging.info("Circuit Breaker RESETEADO automáticamente")
+        else:
+            return None #devolver repuesta o indicar el fallo 
 
     for i in range(retries):
         try:
@@ -54,16 +64,26 @@ def request_con_retry(url, headers, retries=3): #datos para hacer peticiones HTT
 
             if fallos_consecutivos >= CIRCUIT_BREAKER_LIMITE:
                 CIRCUIT_OPEN = True 
+                tiempo_apertura = time.time()  # NUEVA LÍNEA: guardar momento de apertura
                 logging.error("Circuit Breaker ACTIVADO")
                 return None
 
 @app.route("/pedido", methods=["POST"]) #ruta exacta 
 def crear_pedido():
-    if not verificar_token():
-        return jsonify({"error": "No autorizado"}), 401
+    global CIRCUIT_OPEN, tiempo_apertura, fallos_consecutivos
 
-    if CIRCUIT_OPEN: #intentando ingresar al servidor
-        return jsonify({"error": "Servicio temporalmente no disponible"}), 503
+    if not verificar_token():
+        return jsonify({"error": "No autorizado"}), 401 # codigo de estado
+
+    # NUEVA LÓGICA: permitir reapertura automática también aquí antes de bloquear
+    if CIRCUIT_OPEN:
+        if tiempo_apertura and (time.time() - tiempo_apertura >= CIRCUIT_RESET_TIMEOUT):
+            CIRCUIT_OPEN = False
+            fallos_consecutivos = 0
+            tiempo_apertura = None
+            logging.info("Circuit Breaker RESETEADO automáticamente")
+        else:
+            return jsonify({"error": "Servicio temporalmente no disponible"}), 503
 
     # Validar que venga JSON
     if not request.is_json:
@@ -101,7 +121,8 @@ def crear_pedido():
 
         if not producto_resp or producto_resp.status_code != 200: #servicio respondio, pero con error
             return jsonify({"error": "Producto no disponible"}), 400 # producto no disponible
-    #llama al microservicio inventario
+
+        #llama al microservicio inventario
         stock_resp = request_con_retry(
             f"{INVENTARIO_URL}/inventario/{producto_id}",
             headers
